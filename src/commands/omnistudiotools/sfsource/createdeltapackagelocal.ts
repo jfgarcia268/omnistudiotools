@@ -1,10 +1,10 @@
+import path from 'node:path';
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
+import fsExtra from 'fs-extra';
+import { simpleGit as simpleGitInit } from 'simple-git';
 import { AppUtils } from '../../../utils/AppUtils.js';
 import CreateDeltaPackage from './createdeltapackage.js';
-import fsExtra from 'fs-extra';
-import path from 'node:path';
-import { simpleGit as simpleGitInit } from 'simple-git';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.sfsource.createdeltapackagelocal');
@@ -15,7 +15,7 @@ export default class CreateDeltaPackageLocal extends SfCommand<void> {
 
   public static readonly flags = {
     sourcefolder: Flags.string({ char: 'd', summary: messages.getMessage('flags.sourcefolder.summary'), required: true }),
-    hash: Flags.string({ char: 'h', summary: messages.getMessage('flags.hash.summary') }),
+    hash: Flags.string({ char: 'g', summary: messages.getMessage('flags.hash.summary') }),
   };
 
   public async run(): Promise<void> {

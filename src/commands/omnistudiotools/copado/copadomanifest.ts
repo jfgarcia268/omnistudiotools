@@ -1,11 +1,26 @@
+import fsExtra from 'fs-extra';
+import yaml from 'js-yaml';
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
 import { AppUtils } from '../../../utils/AppUtils.js';
-import fsExtra from 'fs-extra';
-import yaml from 'js-yaml';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.copado.copadomanifest');
+
+type MdType = {
+  name: string[];
+  members: string[];
+};
+
+type PackageXml = {
+  Package: {
+    types: MdType[];
+  };
+};
+
+type YamlManifest = {
+  manifest: string[];
+};
 
 export default class CopadoManifest extends SfCommand<void> {
   public static readonly summary = messages.getMessage('summary');
@@ -17,38 +32,7 @@ export default class CopadoManifest extends SfCommand<void> {
     vlocity: Flags.boolean({ char: 's', summary: messages.getMessage('flags.vlocity.summary') }),
   };
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(CopadoManifest);
-    AppUtils.setCommand(this);
-    AppUtils.logInitial('copadomanifest');
-
-    const newFileName = 'CustomMDPreselect.json';
-    const packagefile = flags.package;
-    let copadoManifest: Record<string, unknown>[];
-
-    AppUtils.log4('Creating Copado User Story Manifest');
-    AppUtils.log3('Extracting data from: ' + packagefile);
-
-    if (!flags.vlocity) {
-      const doc = fsExtra.readFileSync(packagefile, 'utf8');
-      const copadoManifestXML = await AppUtils.extractXML(doc);
-      AppUtils.log1('Done');
-      AppUtils.log3('Parsing data...');
-      copadoManifest = this.parseXML(copadoManifestXML, flags.username);
-      AppUtils.log1('Done');
-    } else {
-      const data = (yaml.load(fsExtra.readFileSync(packagefile, 'utf8')) as any)['manifest'];
-      copadoManifest = this.parseXMLVlocity(data, flags.username);
-      AppUtils.log1('Done');
-      AppUtils.log3('Parsing data...');
-    }
-
-    const manifestText = JSON.stringify(copadoManifest);
-    AppUtils.log3('Creating File: ' + newFileName);
-    this.saveFile(newFileName, manifestText);
-  }
-
-  private saveFile(newFileName: string, manifestText: string): void {
+  private static saveFile(newFileName: string, manifestText: string): void {
     if (fsExtra.existsSync(newFileName)) {
       AppUtils.log1('Deleting Old file...');
       fsExtra.unlinkSync(newFileName);
@@ -57,25 +41,24 @@ export default class CopadoManifest extends SfCommand<void> {
     AppUtils.log2('File is created successfully.');
   }
 
-  private getDate(): string {
+  private static getDate(): string {
     const today = new Date();
     const dd = String(today.getDate()).padStart(2, '0');
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const yyyy = today.getFullYear();
-    return yyyy + '/' + mm + '/' + dd;
+    return String(yyyy) + '/' + mm + '/' + dd;
   }
 
-  private parseXML(data: any, username?: string): Record<string, unknown>[] {
+  private static parseXML(data: Record<string, unknown>, username?: string): Array<Record<string, unknown>> {
     const user = username ?? 'None';
-    const date = this.getDate();
-    const copadoManifest: Record<string, unknown>[] = [];
-    const mdTypes = data['Package']['types'];
-    for (const key in mdTypes) {
-      const element = mdTypes[key];
+    const date = CopadoManifest.getDate();
+    const copadoManifest: Array<Record<string, unknown>> = [];
+    const packageData = data as unknown as PackageXml;
+    const mdTypes = packageData.Package.types;
+    for (const element of mdTypes) {
       const mdType = element.name[0];
-      AppUtils.log2(mdType + ': ' + Object.keys(element['members']).length);
-      for (const key2 in element['members']) {
-        const mdname = element['members'][key2];
+      AppUtils.log2(mdType + ': ' + String(Object.keys(element.members).length));
+      for (const mdname of element.members) {
         copadoManifest.push({
           t: mdType,
           n: mdname,
@@ -90,12 +73,11 @@ export default class CopadoManifest extends SfCommand<void> {
     return copadoManifest;
   }
 
-  private parseXMLVlocity(data: any, username?: string): Record<string, unknown>[] {
+  private static parseXMLVlocity(data: string[], username?: string): Array<Record<string, unknown>> {
     const user = username ?? 'None';
-    const date = this.getDate();
-    const copadoManifest: Record<string, unknown>[] = [];
-    for (const key in data) {
-      const element = data[key];
+    const date = CopadoManifest.getDate();
+    const copadoManifest: Array<Record<string, unknown>> = [];
+    for (const element of data) {
       const words = element.split('/');
       const type = words[0];
       const name = words[1];
@@ -111,5 +93,36 @@ export default class CopadoManifest extends SfCommand<void> {
       });
     }
     return copadoManifest;
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(CopadoManifest);
+    AppUtils.setCommand(this);
+    AppUtils.logInitial('copadomanifest');
+
+    const newFileName = 'CustomMDPreselect.json';
+    const packagefile = flags.package;
+    let copadoManifest: Array<Record<string, unknown>>;
+
+    AppUtils.log4('Creating Copado User Story Manifest');
+    AppUtils.log3('Extracting data from: ' + packagefile);
+
+    if (!flags.vlocity) {
+      const doc = fsExtra.readFileSync(packagefile, 'utf8');
+      const copadoManifestXML = await AppUtils.extractXML(doc);
+      AppUtils.log1('Done');
+      AppUtils.log3('Parsing data...');
+      copadoManifest = CopadoManifest.parseXML(copadoManifestXML, flags.username);
+      AppUtils.log1('Done');
+    } else {
+      const yamlDoc = yaml.load(fsExtra.readFileSync(packagefile, 'utf8')) as YamlManifest;
+      copadoManifest = CopadoManifest.parseXMLVlocity(yamlDoc.manifest, flags.username);
+      AppUtils.log1('Done');
+      AppUtils.log3('Parsing data...');
+    }
+
+    const manifestText = JSON.stringify(copadoManifest);
+    AppUtils.log3('Creating File: ' + newFileName);
+    CopadoManifest.saveFile(newFileName, manifestText);
   }
 }

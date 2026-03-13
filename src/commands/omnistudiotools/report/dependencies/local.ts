@@ -1,8 +1,8 @@
+import fs from 'node:fs';
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
 import { AppUtils } from '../../../../utils/AppUtils.js';
 import Remote from './remote.js';
-import fs from 'node:fs';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.report.dependencies.local');
@@ -17,67 +17,12 @@ export default class Local extends SfCommand<void> {
     folder: Flags.string({ char: 'f', summary: messages.getMessage('flags.folder.summary') }),
   };
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(Local);
-    AppUtils.setCommand(this);
-    AppUtils.logInitial('local');
-    dependenciesFound = 0;
-
-    const folder = flags.folder;
-    if (!folder || !fs.existsSync(folder)) throw new Error("Folder '" + folder + "' not found");
-
-    const resultsFile = './Dependencies_Report_Local.csv';
-    AppUtils.log2('Results File: ' + resultsFile);
-    if (fs.existsSync(resultsFile)) fs.unlinkSync(resultsFile);
-
-    const createFilesStream = fs.createWriteStream(resultsFile, { flags: 'a' });
-    createFilesStream.write('DataPack Name,Is Reusable,Dependency,Dependency Type,Remote Class,Remote Method\r\n');
-
-    let numberOfOmniScriptFound = 0;
-    const osFolder = folder + '/OmniScript';
-    if (fs.existsSync(osFolder)) {
-      const files = fs
-        .readdirSync(osFolder)
-        .filter((file: string) => fs.statSync(osFolder + '/' + file).isDirectory());
-      if (files.length > 0) {
-        numberOfOmniScriptFound = this.omniScriptVIPDependencies(createFilesStream, folder, 'OmniScript');
-      } else {
-        AppUtils.log3('No OmniScripts found in Folder: ' + osFolder);
-      }
-    } else {
-      AppUtils.log3('No OmniScript Folder found in: ' + folder);
-    }
-
-    let numberOfIPFound = 0;
-    const ipFolder = folder + '/IntegrationProcedure';
-    if (fs.existsSync(ipFolder)) {
-      const files = fs
-        .readdirSync(ipFolder)
-        .filter((file: string) => fs.statSync(ipFolder + '/' + file).isDirectory());
-      if (files.length > 0) {
-        numberOfIPFound = this.omniScriptVIPDependencies(createFilesStream, folder, 'IntegrationProcedure');
-      } else {
-        AppUtils.log3('No IntegrationProcedures found in Folder: ' + ipFolder);
-      }
-    } else {
-      AppUtils.log3('No IntegrationProcedures Folder found in: ' + folder);
-    }
-
-    console.log('');
-    AppUtils.log3('Done Finding Dependencies');
-    AppUtils.log3('Number of OmniScripts Scanned: ' + numberOfOmniScriptFound);
-    AppUtils.log3('Number of IntegrationProcedures Scanned: ' + numberOfIPFound);
-    AppUtils.log3('Number of Total Dependencies Found: ' + dependenciesFound);
-    AppUtils.log3('CSV File Generated: ' + resultsFile);
-    console.log('');
-  }
-
-  private omniScriptVIPDependencies(
+  private static omniScriptVIPDependencies(
     createFilesStream: fs.WriteStream,
     folder: string,
     dataPackType: string
   ): number {
-    console.log('');
+    AppUtils.log2('');
     AppUtils.log3('Finding Dependencies for ' + dataPackType + ' in ' + folder);
     const dataTypePacksFolder = folder + '/' + dataPackType;
     const folders = fs.readdirSync(dataTypePacksFolder);
@@ -93,7 +38,7 @@ export default class Local extends SfCommand<void> {
 
         if (fs.existsSync(dataPackMainFile)) {
           const jsonString = fs.readFileSync(dataPackMainFile, 'utf8');
-          const jsonStringObjects = JSON.parse(jsonString);
+          const jsonStringObjects = JSON.parse(jsonString) as Record<string, unknown>;
           const isReusable = jsonStringObjects['%vlocity_namespace%__IsReusable__c'];
 
           if (fs.existsSync(propertySetFile)) {
@@ -111,7 +56,7 @@ export default class Local extends SfCommand<void> {
           for (const file of files) {
             const filePath = dataPacksFolder + '/' + file;
             if (fs.statSync(filePath).isFile() && file.includes('_Element_')) {
-              const elementJson = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+              const elementJson = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
               const propertySet = JSON.stringify(elementJson['%vlocity_namespace%__PropertySet__c']);
               const remoteResult2 = Remote.getPropertySetValues(
                 createFilesStream,
@@ -128,5 +73,60 @@ export default class Local extends SfCommand<void> {
     }
     AppUtils.log3('Done finding Dependencies for ' + dataPackType + ' in ' + folder);
     return numberOfDPFound;
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(Local);
+    AppUtils.setCommand(this);
+    AppUtils.logInitial('local');
+    dependenciesFound = 0;
+
+    const folder = flags.folder;
+    if (!folder || !fs.existsSync(folder)) throw new Error("Folder '" + String(folder) + "' not found");
+
+    const resultsFile = './Dependencies_Report_Local.csv';
+    AppUtils.log2('Results File: ' + resultsFile);
+    if (fs.existsSync(resultsFile)) fs.unlinkSync(resultsFile);
+
+    const createFilesStream = fs.createWriteStream(resultsFile, { flags: 'a' });
+    createFilesStream.write('DataPack Name,Is Reusable,Dependency,Dependency Type,Remote Class,Remote Method\r\n');
+
+    let numberOfOmniScriptFound = 0;
+    const osFolder = folder + '/OmniScript';
+    if (fs.existsSync(osFolder)) {
+      const files = fs
+        .readdirSync(osFolder)
+        .filter((file: string) => fs.statSync(osFolder + '/' + file).isDirectory());
+      if (files.length > 0) {
+        numberOfOmniScriptFound = Local.omniScriptVIPDependencies(createFilesStream, folder, 'OmniScript');
+      } else {
+        AppUtils.log3('No OmniScripts found in Folder: ' + osFolder);
+      }
+    } else {
+      AppUtils.log3('No OmniScript Folder found in: ' + folder);
+    }
+
+    let numberOfIPFound = 0;
+    const ipFolder = folder + '/IntegrationProcedure';
+    if (fs.existsSync(ipFolder)) {
+      const files = fs
+        .readdirSync(ipFolder)
+        .filter((file: string) => fs.statSync(ipFolder + '/' + file).isDirectory());
+      if (files.length > 0) {
+        numberOfIPFound = Local.omniScriptVIPDependencies(createFilesStream, folder, 'IntegrationProcedure');
+      } else {
+        AppUtils.log3('No IntegrationProcedures found in Folder: ' + ipFolder);
+      }
+    } else {
+      AppUtils.log3('No IntegrationProcedures Folder found in: ' + folder);
+    }
+
+    AppUtils.log2('');
+    AppUtils.log3('Done Finding Dependencies');
+    AppUtils.log3('Number of OmniScripts Scanned: ' + String(numberOfOmniScriptFound));
+    AppUtils.log3('Number of IntegrationProcedures Scanned: ' + String(numberOfIPFound));
+    AppUtils.log3('Number of Total Dependencies Found: ' + String(dependenciesFound));
+    AppUtils.log3('CSV File Generated: ' + resultsFile);
+    AppUtils.log2('');
   }
 }

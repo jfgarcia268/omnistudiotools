@@ -1,18 +1,27 @@
-import xml2js from 'xml2js';
 import { createRequire } from 'node:module';
+import xml2js from 'xml2js';
+import type { Connection } from '@salesforce/core';
 
 const require = createRequire(import.meta.url);
 const packageJson = require('../../package.json') as { version: string };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type CommandRef = any;
+export type SfConnection = Connection;
+
+type SpinnerCmd = {
+  spinner: {
+    status: string | undefined;
+    start(msg: string): void;
+    stop(msg?: string): void;
+  };
+  log(msg: string): void;
+}
 
 export class AppUtils {
   public static appVersion: string = packageJson.version;
   public static namespace: string;
-  private static cmd: CommandRef | undefined;
+  private static cmd: SpinnerCmd | undefined;
 
-  public static setCommand(cmd: CommandRef): void {
+  public static setCommand(cmd: SpinnerCmd): void {
     this.cmd = cmd;
   }
 
@@ -32,7 +41,7 @@ export class AppUtils {
     return newArray;
   }
 
-  public static async setNameSpace(conn: any, packageType: string | undefined): Promise<string> {
+  public static async setNameSpace(conn: SfConnection, packageType: string | undefined): Promise<string> {
     if (packageType === 'cmt') {
       AppUtils.namespace = 'vlocity_cmt__';
     } else if (packageType === 'ins') {
@@ -41,7 +50,7 @@ export class AppUtils {
       AppUtils.namespace = 'omnistudio__';
     } else if (!packageType) {
       const query = "Select Name, NamespacePrefix from ApexClass where Name = 'DRDataPackService'";
-      const result = await conn.query(query);
+      const result = await conn.query<{ NamespacePrefix: string }>(query);
       const nameSpaceResult = result.records[0].NamespacePrefix;
       if (nameSpaceResult) {
         this.namespace = nameSpaceResult + '__';
@@ -50,9 +59,8 @@ export class AppUtils {
     return this.namespace;
   }
 
-  public static async runApex(conn: any, apexBody: string): Promise<any> {
-    const res = await conn.tooling.executeAnonymous(apexBody);
-    return res;
+  public static async runApex(conn: SfConnection, apexBody: string): Promise<{ success: boolean; compiled: boolean }> {
+    return conn.tooling.executeAnonymous(apexBody);
   }
 
   public static logInitial(command: string): void {
@@ -60,9 +68,9 @@ export class AppUtils {
     this.log3('Command: ' + command);
   }
 
-  public static logInitialExtra(conn: any): void {
+  public static logInitialExtra(conn: SfConnection): void {
     this.log3('Username: ' + conn.getUsername());
-    this.log3('LoginUrl: ' + conn.getAuthInfoFields().loginUrl);
+    this.log3('LoginUrl: ' + String(conn.loginUrl));
   }
 
   public static log4(message: string): void {
@@ -105,24 +113,12 @@ export class AppUtils {
     }
   }
 
-  private static log(message: string): void {
-    if (this.cmd) {
-      this.cmd.log(message);
-    } else {
-      console.log(message);
-    }
-  }
-
-  private static logStyledHeader(message: string): void {
-    console.log(message);
-  }
-
-  public static getDataByPath(data: any, pathStr: string): any {
+  public static getDataByPath(data: Record<string, unknown>, pathStr: string): unknown {
     try {
       const pathArray = pathStr.split('.');
-      let current = data;
+      let current: unknown = data;
       for (const key of pathArray) {
-        current = current[key];
+        current = (current as Record<string, unknown>)[key];
       }
       return current;
     } catch {
@@ -134,9 +130,9 @@ export class AppUtils {
     return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   }
 
-  public static extractXML(xml: string): Promise<any> {
+  public static extractXML(xml: string): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
-      xml2js.parseString(xml, (err: any, result: any) => {
+      xml2js.parseString(xml, (err: Error | null, result: Record<string, unknown>) => {
         if (err) {
           reject(err);
         } else {
@@ -146,14 +142,27 @@ export class AppUtils {
     });
   }
 
-  public static table(data: any[], columns: string[]): void {
+  public static table(data: Array<Record<string, unknown>>, columns: string[]): void {
     if (data.length === 0) return;
     const header = columns.join(' | ');
-    console.log(header);
-    console.log(columns.map((c) => '-'.repeat(c.length)).join(' | '));
+    AppUtils.logStyledHeader(header);
+    AppUtils.logStyledHeader(columns.map((c) => '-'.repeat(c.length)).join(' | '));
     for (const row of data) {
       const line = columns.map((c) => String(row[c] ?? '')).join(' | ');
-      console.log(line);
+      AppUtils.logStyledHeader(line);
     }
+  }
+
+  private static log(message: string): void {
+    if (this.cmd) {
+      this.cmd.log(message);
+    } else {
+      AppUtils.logStyledHeader(message);
+    }
+  }
+
+  private static logStyledHeader(message: string): void {
+    // eslint-disable-next-line no-console
+    console.log(message);
   }
 }

@@ -59,15 +59,15 @@ export default class CleanOmniScripts extends SfCommand<void> {
       return;
     }
 
-    const firstresult = result[0];
+    const firstresult: Record<string, unknown> = result[0];
     let currentComp =
-      firstresult[nameField] + firstresult[languageField] + firstresult[typeField] + firstresult[subTypeField];
+      String(firstresult[nameField]) + String(firstresult[languageField]) + String(firstresult[typeField]) + String(firstresult[subTypeField]);
     let count = 0;
-    const OStoDelete: any[] = [];
+    const OStoDelete: Array<Record<string, unknown>> = [];
 
     AppUtils.log2('The Following OmniScripts will be deleted:');
     for (const record of result) {
-      const componentid = record[nameField] + record[languageField] + record[typeField] + record[subTypeField];
+      const componentid = String(record[nameField]) + String(record[languageField]) + String(record[typeField]) + String(record[subTypeField]);
 
       if (currentComp === componentid) {
         count++;
@@ -79,15 +79,15 @@ export default class CleanOmniScripts extends SfCommand<void> {
       if (count > versionsToKeep && record[isActiveField] === 'false') {
         const output =
           'Name: ' +
-          record[nameField] +
+          String(record[nameField]) +
           ', Language: ' +
-          record[languageField] +
+          String(record[languageField]) +
           ', Type: ' +
-          record[typeField] +
+          String(record[typeField]) +
           ', SubType: ' +
-          record[subTypeField] +
+          String(record[subTypeField]) +
           ', Version: ' +
-          record[versionField];
+          String(record[versionField]);
         AppUtils.log1(output);
         delete record[nameField];
         delete record[versionField];

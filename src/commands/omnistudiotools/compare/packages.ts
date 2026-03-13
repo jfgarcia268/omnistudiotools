@@ -1,9 +1,9 @@
-import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
-import { Messages } from '@salesforce/core';
-import { AppUtils } from '../../../utils/AppUtils.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
+import { Messages } from '@salesforce/core';
 import dircompare from 'dir-compare';
+import { AppUtils } from '../../../utils/AppUtils.js';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.compare.packages');
@@ -17,38 +17,7 @@ export default class ComparePackages extends SfCommand<void> {
     folder2: Flags.string({ char: 't', summary: messages.getMessage('flags.folder2.summary'), required: true }),
   };
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(ComparePackages);
-    AppUtils.setCommand(this);
-    AppUtils.logInitial('packages');
-
-    const foldera = flags.folder1;
-    const folderb = flags.folder2;
-
-    if (!fs.existsSync(foldera)) throw new Error("Folder '" + foldera + "' not found");
-    if (!fs.existsSync(folderb)) throw new Error("Folder '" + folderb + "' not found");
-
-    const resultData: any[] = [];
-
-    try {
-      this.compareFoldersImpl(foldera, folderb, resultData);
-    } catch (error: any) {
-      console.log(error.stack);
-    }
-
-    if (resultData.length > 0) {
-      this.log(' ');
-      this.log('OVERLAP RESULTS:');
-      this.log(' ');
-      AppUtils.table(resultData, ['DatapackType', 'DatapackKey', 'Diff']);
-      this.log(' ');
-      throw new Error('Overlap was Found - Number of common components: ' + resultData.length);
-    } else {
-      AppUtils.log3('Success - No Overlap between ' + foldera + ' and ' + folderb);
-    }
-  }
-
-  private compareFoldersImpl(foldera: string, folderb: string, resultData: any[]): void {
+  private static compareFoldersImpl(foldera: string, folderb: string, resultData: Array<Record<string, unknown>>): void {
     AppUtils.log3('Finding Overlap between ' + foldera + ' and ' + folderb);
     const firstLevelFolder = fs.readdirSync(foldera);
     for (const folder1 of firstLevelFolder) {
@@ -70,6 +39,37 @@ export default class ComparePackages extends SfCommand<void> {
           }
         }
       }
+    }
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(ComparePackages);
+    AppUtils.setCommand(this);
+    AppUtils.logInitial('packages');
+
+    const foldera = flags.folder1;
+    const folderb = flags.folder2;
+
+    if (!fs.existsSync(foldera)) throw new Error("Folder '" + foldera + "' not found");
+    if (!fs.existsSync(folderb)) throw new Error("Folder '" + folderb + "' not found");
+
+    const resultData: Array<Record<string, unknown>> = [];
+
+    try {
+      ComparePackages.compareFoldersImpl(foldera, folderb, resultData);
+    } catch (error: unknown) {
+      AppUtils.log2(String(error));
+    }
+
+    if (resultData.length > 0) {
+      this.log(' ');
+      this.log('OVERLAP RESULTS:');
+      this.log(' ');
+      AppUtils.table(resultData, ['DatapackType', 'DatapackKey', 'Diff']);
+      this.log(' ');
+      throw new Error('Overlap was Found - Number of common components: ' + resultData.length);
+    } else {
+      AppUtils.log3('Success - No Overlap between ' + foldera + ' and ' + folderb);
     }
   }
 }

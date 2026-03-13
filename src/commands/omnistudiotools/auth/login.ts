@@ -1,7 +1,7 @@
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { AuthInfo, Messages } from '@salesforce/core';
-import { AppUtils } from '../../../utils/AppUtils.js';
 import jsforce from 'jsforce';
+import { AppUtils } from '../../../utils/AppUtils.js';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.auth.login');
@@ -44,8 +44,8 @@ export default class Login extends SfCommand<void> {
 
     AppUtils.log2('Creating Alias: ' + alias);
     const accessTokenOptions: AuthInfo.Options['accessTokenOptions'] = {
-      accessToken: conn.accessToken!,
-      instanceUrl: conn.instanceUrl!,
+      accessToken: conn.accessToken ?? undefined,
+      instanceUrl: conn.instanceUrl,
       loginUrl: loginURL,
     };
 

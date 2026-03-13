@@ -1,6 +1,9 @@
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
 import { AppUtils } from '../../../utils/AppUtils.js';
+import type { SfConnection } from '../../../utils/AppUtils.js';
+import { getBulk } from '../../../utils/BulkTypes.js';
+import type { BulkIngestBatchResult } from '../../../utils/BulkTypes.js';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.clean.templates');
@@ -14,6 +17,34 @@ export default class CleanTemplates extends SfCommand<void> {
     numberversions: Flags.integer({ char: 'n', summary: messages.getMessage('flags.numberversions.summary') }),
     package: Flags.string({ char: 'p', summary: messages.getMessage('flags.package.summary') }),
   };
+
+  private static async deleteBatch(conn: SfConnection, objectName: string, records: Array<Record<string, unknown>>): Promise<void> {
+    const bulk = getBulk(conn);
+    await new Promise<void>((resolveBatch) => {
+      const job = bulk.createJob(objectName, 'delete');
+      const batch = job.createBatch();
+      batch.execute(records);
+
+      batch.on('error', (err: Error) => {
+        AppUtils.log2('Error, batchInfo: ' + String(err));
+        resolveBatch();
+      });
+      batch.on('queue', () => {
+        AppUtils.log2('Waiting for batch to finish');
+        batch.poll(1000, 20_000);
+      });
+      batch.on('response', (rets: BulkIngestBatchResult) => {
+        for (let i = 0; i < rets.length; i++) {
+          if (rets[i].success) {
+            AppUtils.log1('#' + (i + 1) + ' Delete successfully: ' + String(rets[i].id));
+          } else {
+            AppUtils.log1('#' + (i + 1) + ' Error occurred, message = ' + rets[i].errors.join(', '));
+          }
+        }
+        resolveBatch();
+      });
+    });
+  }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(CleanTemplates);
@@ -31,7 +62,7 @@ export default class CleanTemplates extends SfCommand<void> {
     }
 
     AppUtils.logInitial('templates');
-    AppUtils.log2('Versions To Keep: ' + versionsToKeep);
+    AppUtils.log2('Versions To Keep: ' + String(versionsToKeep));
 
     if (!versionsToKeep || versionsToKeep < 2) {
       throw new Error('Error: -n, --numberversions has to be greater or equal to 2');
@@ -44,7 +75,7 @@ export default class CleanTemplates extends SfCommand<void> {
       'ORDER BY Name, %name-space%Version__c DESC';
 
     const query = AppUtils.replaceaNameSpace(initialQuery);
-    const result = await conn.query(query);
+    const result = await conn.query<Record<string, unknown>>(query);
 
     if (!result.records || result.records.length <= 0) {
       throw new Error('No results found for the org.');
@@ -56,7 +87,7 @@ export default class CleanTemplates extends SfCommand<void> {
 
     let currentComp = result.records[0][nameField];
     let count = 0;
-    const templatesToDelete: any[] = [];
+    const templatesToDelete: Array<Record<string, unknown>> = [];
 
     AppUtils.log2('The Following Templates will be deleted:');
 
@@ -71,38 +102,12 @@ export default class CleanTemplates extends SfCommand<void> {
 
       if (count > versionsToKeep && !record[isActiveField]) {
         templatesToDelete.push(record);
-        AppUtils.log1('Name: ' + record[nameField] + ', Version: ' + record[versionField]);
+        AppUtils.log1('Name: ' + String(record[nameField]) + ', Version: ' + String(record[versionField]));
       }
     }
 
     if (templatesToDelete.length > 0) {
-      await new Promise<void>((resolveBatch) => {
-        const job = conn.bulk.createJob(
-          AppUtils.replaceaNameSpace('%name-space%VlocityUITemplate__c'),
-          'delete'
-        );
-        const batch = job.createBatch();
-        batch.execute(templatesToDelete);
-
-        batch.on('error', (err: any) => {
-          console.log('Error, batchInfo:', err);
-          resolveBatch();
-        });
-        batch.on('queue', () => {
-          AppUtils.log2('Waiting for batch to finish');
-          batch.poll(1000, 20000);
-        });
-        batch.on('response', (rets: any[]) => {
-          for (let i = 0; i < rets.length; i++) {
-            if (rets[i].success) {
-              AppUtils.log1('#' + (i + 1) + ' Delete successfully: ' + rets[i].id);
-            } else {
-              AppUtils.log1('#' + (i + 1) + ' Error occurred, message = ' + rets[i].errors.join(', '));
-            }
-          }
-          resolveBatch();
-        });
-      });
+      await CleanTemplates.deleteBatch(conn, AppUtils.replaceaNameSpace('%name-space%VlocityUITemplate__c'), templatesToDelete);
     } else {
       AppUtils.log2('Nothing to delete');
     }

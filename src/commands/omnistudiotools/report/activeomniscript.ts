@@ -34,7 +34,7 @@ export default class ActiveOmniScript extends SfCommand<void> {
       const query =
         'SELECT ID, Name, %name-space%Version__c, %name-space%IsActive__c, %name-space%Language__c, %name-space%Type__c, %name-space%SubType__c FROM %name-space%OmniScript__c Order By Name, %name-space%Language__c, %name-space%Type__c,%name-space%SubType__c, %name-space%Version__c DESC';
       const initialQuery = AppUtils.replaceaNameSpace(query);
-      const result = await conn.query(initialQuery);
+      const result = await conn.query<Record<string, unknown>>(initialQuery);
 
       if (!result.records || result.records.length <= 0) {
         throw new Error('No results found for the org.');
@@ -46,41 +46,39 @@ export default class ActiveOmniScript extends SfCommand<void> {
       const subTypeField = AppUtils.replaceaNameSpace('%name-space%SubType__c');
       const isActiveField = AppUtils.replaceaNameSpace('%name-space%IsActive__c');
 
-      let lastresult = result.records[0];
+      let lastresult: Record<string, unknown> = result.records[0];
       let currentComp =
-        lastresult[nameField] + lastresult[languageField] + lastresult[typeField] + lastresult[subTypeField];
+        String(lastresult[nameField]) + String(lastresult[languageField]) + String(lastresult[typeField]) + String(lastresult[subTypeField]);
       this.log('  >> The Following OmniScripts does not have an active version:');
       let currentIsActive = false;
       let count = 0;
 
       for (const record of result.records) {
-        const componentid = record[nameField] + record[languageField] + record[typeField] + record[subTypeField];
+        const componentid = String(record[nameField]) + String(record[languageField]) + String(record[typeField]) + String(record[subTypeField]);
         if (currentComp !== componentid) {
           if (currentIsActive === false) {
             this.log(
               '    > Name: ' +
-                lastresult[nameField] +
+                String(lastresult[nameField]) +
                 ' Language: ' +
-                lastresult[languageField] +
+                String(lastresult[languageField]) +
                 ' Type: ' +
-                lastresult[typeField] +
+                String(lastresult[typeField]) +
                 ' SubType: ' +
-                lastresult[subTypeField]
+                String(lastresult[subTypeField])
             );
             count = count + 1;
           }
-          currentIsActive = record[isActiveField];
-        } else {
-          if (record[isActiveField] === true) {
-            currentIsActive = true;
-          }
+          currentIsActive = record[isActiveField] === true;
+        } else if (record[isActiveField] === true) {
+          currentIsActive = true;
         }
         currentComp = componentid;
         lastresult = record;
       }
-      this.log('  >> Number of OmniScripts with no active version: ' + count);
-    } catch (e) {
-      console.log(e);
+      this.log('  >> Number of OmniScripts with no active version: ' + String(count));
+    } catch (e: unknown) {
+      AppUtils.log2(String(e));
     }
   }
 }
