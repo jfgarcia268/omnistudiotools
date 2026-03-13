@@ -1,8 +1,8 @@
+import fs from 'node:fs';
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
-import { AppUtils } from '../../../utils/AppUtils.js';
-import fs from 'node:fs';
 import dircompare from 'dir-compare';
+import { AppUtils } from '../../../utils/AppUtils.js';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.compare.folders');
@@ -16,30 +16,7 @@ export default class CompareFolders extends SfCommand<void> {
     folder2: Flags.string({ char: 't', summary: messages.getMessage('flags.folder2.summary'), required: true }),
   };
 
-  public async run(): Promise<void> {
-    const { flags } = await this.parse(CompareFolders);
-    AppUtils.setCommand(this);
-    AppUtils.logInitial('folders');
-
-    const foldera = flags.folder1;
-    const folderb = flags.folder2;
-
-    if (!fs.existsSync(foldera)) throw new Error("Folder '" + foldera + "' not found");
-    if (!fs.existsSync(folderb)) throw new Error("Folder '" + folderb + "' not found");
-
-    const resultsFile = './Compare_' + foldera + '_' + folderb + '.csv';
-    AppUtils.log2('Results File: ' + resultsFile);
-
-    if (fs.existsSync(resultsFile)) fs.unlinkSync(resultsFile);
-    const createFiles = fs.createWriteStream(resultsFile, { flags: 'a' });
-    const initialHeader = 'VLOCITY_KEY,COMP_TYPE,COMP_NAME,' + foldera + ',' + folderb + ',EQUAL';
-    createFiles.write(initialHeader + '\r\n');
-
-    this.compareFoldersImpl(createFiles, foldera, folderb, true);
-    this.compareFoldersImpl(createFiles, folderb, foldera, false);
-  }
-
-  private compareFoldersImpl(
+  private static compareFoldersImpl(
     createFiles: fs.WriteStream,
     foldera: string,
     folderb: string,
@@ -64,12 +41,35 @@ export default class CompareFolders extends SfCommand<void> {
               const options = { compareContent: true };
               const res = dircompare.compareSync(pathLevel2A, pathLevel2B, options);
               const diff = res.same;
-              const foundResult = FolderLevel1 + '/' + component + ',' + FolderLevel1 + ',' + component + ',Yes,Yes,' + diff;
+              const foundResult = FolderLevel1 + '/' + component + ',' + FolderLevel1 + ',' + component + ',Yes,Yes,' + String(diff);
               createFiles.write(foundResult + '\r\n');
             }
           }
         }
       }
     }
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(CompareFolders);
+    AppUtils.setCommand(this);
+    AppUtils.logInitial('folders');
+
+    const foldera = flags.folder1;
+    const folderb = flags.folder2;
+
+    if (!fs.existsSync(foldera)) throw new Error("Folder '" + foldera + "' not found");
+    if (!fs.existsSync(folderb)) throw new Error("Folder '" + folderb + "' not found");
+
+    const resultsFile = './Compare_' + foldera + '_' + folderb + '.csv';
+    AppUtils.log2('Results File: ' + resultsFile);
+
+    if (fs.existsSync(resultsFile)) fs.unlinkSync(resultsFile);
+    const createFiles = fs.createWriteStream(resultsFile, { flags: 'a' });
+    const initialHeader = 'VLOCITY_KEY,COMP_TYPE,COMP_NAME,' + foldera + ',' + folderb + ',EQUAL';
+    createFiles.write(initialHeader + '\r\n');
+
+    CompareFolders.compareFoldersImpl(createFiles, foldera, folderb, true);
+    CompareFolders.compareFoldersImpl(createFiles, folderb, foldera, false);
   }
 }

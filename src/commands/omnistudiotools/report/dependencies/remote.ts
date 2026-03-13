@@ -1,7 +1,9 @@
+import fs from 'node:fs';
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
 import { AppUtils } from '../../../../utils/AppUtils.js';
-import fs from 'node:fs';
+import type { SfConnection } from '../../../../utils/AppUtils.js';
+import { getBulk } from '../../../../utils/BulkTypes.js';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.report.dependencies.remote');
@@ -26,6 +28,173 @@ export default class Remote extends SfCommand<void> {
     'target-org': Flags.requiredOrg(),
     package: Flags.string({ char: 'p', summary: messages.getMessage('flags.package.summary') }),
   };
+
+  public static report(): void {
+    AppUtils.log2('');
+    AppUtils.log3('Done Finding Dependencies');
+    AppUtils.log3('Number of OmniScripts and IntegrationProcedures Scanned: ' + String(numberofOSandVIP));
+    AppUtils.log3('Number of Total Dependencies Found: ' + String(totalDependenciesFound));
+    AppUtils.log3('CSV File Generated: ' + resultsFile);
+    AppUtils.log2('');
+  }
+
+  public static omniScriptPropertySet(omniScripRecords: { records: Array<Record<string, unknown>> }, createFilesStream: fs.WriteStream): void {
+    let totalDep = 0;
+    for (const element of omniScripRecords.records) {
+      const propertySet = element[propertySetOSField];
+      const omniScriptType = element[typeField];
+      const omniScriptSubType = element[subTypeField];
+      const omniScriptLanguage = element[languageField];
+      const dataPack = String(omniScriptType) + '_' + String(omniScriptSubType) + '_' + String(omniScriptLanguage);
+      const isReusableValue = element[isResusableField];
+      let dataPackType = 'OmniScript';
+      if (element[isProcedureField] === true) dataPackType = 'IntegrationProcedure';
+      if (propertySet) {
+        const resultDep = Remote.getPropertySetValues(
+          createFilesStream,
+          String(propertySet),
+          dataPackType,
+          dataPack,
+          isReusableValue
+        );
+        totalDep += resultDep;
+      }
+    }
+    totalDependenciesFound += totalDep;
+  }
+
+  public static queryElements(conn: SfConnection, omniScripRecords: Map<string, Record<string, unknown>>, createFilesStream: fs.WriteStream): void {
+    const elementsQuery =
+      'SELECT Id, Name, %name-space%OmniScriptId__c, %name-space%PropertySet__c FROM %name-space%Element__c';
+    const queryString2 = AppUtils.replaceaNameSpace(elementsQuery);
+
+    const bulk = getBulk(conn);
+    bulk
+      .query(queryString2)
+      .on('data', (result: Record<string, unknown>) => {
+        const elementPropertySet = result[propertySetOSField];
+        const omniScripId = result[elementOSIDField];
+        const omniScripRecord = omniScripRecords.get(String(omniScripId));
+        if (omniScripRecord) {
+          let dataPackType = 'OmniScript';
+          if (omniScripRecord[isProcedureField] === true) dataPackType = 'IntegrationProcedure';
+          const omniScriptType = omniScripRecord[typeField];
+          const omniScriptSubType = omniScripRecord[subTypeField];
+          const omniScriptLanguage = omniScripRecord[languageField];
+          const dataPack = String(omniScriptType) + '_' + String(omniScriptSubType) + '_' + String(omniScriptLanguage);
+          const isReusableValue = omniScripRecord[isResusableField];
+          AppUtils.log2('Looking for Dependencies in ' + dataPackType + ': ' + dataPack);
+          const resultDep = Remote.getPropertySetValues(
+            createFilesStream,
+            String(elementPropertySet),
+            dataPackType,
+            dataPack,
+            isReusableValue
+          );
+          totalDependenciesFound += resultDep;
+        }
+      })
+      .on('queue', () => {
+        AppUtils.log3('Done looking for Dependencies in Elements');
+      })
+      .on('end', () => {
+        Remote.report();
+      })
+      .on('error', (err: Error) => {
+        AppUtils.log2('Error in bulk query: ' + String(err));
+      });
+  }
+
+  public static getPropertySetValues(
+    createFilesStream: fs.WriteStream,
+    propertySetObject: string,
+    dataPackType: string,
+    dataPack: string,
+    isReusable: unknown
+  ): number {
+    let found = 0;
+    const jsonStringObjects = JSON.parse(propertySetObject) as Record<string, unknown>;
+
+    const bundle = jsonStringObjects['bundle'];
+    if (bundle) {
+      createFilesStream.write(
+        dataPackType + '/' + dataPack + ',' + String(isReusable) + ',DataRaptor/' + String(bundle) + ',DataRaptor,None,None\r\n'
+      );
+      found++;
+    }
+
+    const type = jsonStringObjects['Type'];
+    const subType = jsonStringObjects['Sub Type'];
+    const language = jsonStringObjects['Language'];
+    if (type) {
+      const completeName = String(type) + '_' + String(subType) + '_' + String(language);
+      createFilesStream.write(
+        dataPackType +
+          '/' +
+          dataPack +
+          ',' +
+          String(isReusable) +
+          ',OmniScript/' +
+          completeName +
+          ',OmniScript,None,None\r\n'
+      );
+      found++;
+    }
+
+    const vipKey = jsonStringObjects['integrationProcedureKey'];
+    if (vipKey) {
+      createFilesStream.write(
+        dataPackType +
+          '/' +
+          dataPack +
+          ',' +
+          String(isReusable) +
+          ',IntegrationProcedure/' +
+          String(vipKey) +
+          ',IntegrationProcedure,None,None\r\n'
+      );
+      found++;
+    }
+
+    const remoteClass = jsonStringObjects['remoteClass'];
+    const remoteMethod = jsonStringObjects['remoteMethod'];
+    if (remoteClass) {
+      createFilesStream.write(
+        dataPackType +
+          '/' +
+          dataPack +
+          ',' +
+          String(isReusable) +
+          ',' +
+          String(remoteClass) +
+          '.' +
+          String(remoteMethod) +
+          ',REMOTE CALL,' +
+          String(remoteClass) +
+          ',' +
+          String(remoteMethod) +
+          '\r\n'
+      );
+      found++;
+    }
+
+    const templateID = jsonStringObjects['HTMLTemplateId'];
+    if (templateID) {
+      createFilesStream.write(
+        dataPackType +
+          '/' +
+          dataPack +
+          ',' +
+          String(isReusable) +
+          ',VlocityUITemplate/' +
+          String(templateID) +
+          ',VlocityUITemplate,None,None\r\n'
+      );
+      found++;
+    }
+
+    return found;
+  }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(Remote);
@@ -65,188 +234,20 @@ export default class Remote extends SfCommand<void> {
     const oSValuesQueryFinal = AppUtils.replaceaNameSpace(oSValuesQuery);
 
     AppUtils.log3('Looking for OmniScripts and IntegrationProcedures in the environment');
-    const oSValuesResults = await conn.query(oSValuesQueryFinal);
+    const oSValuesResults = await conn.query<Record<string, unknown>>(oSValuesQueryFinal);
 
-    const oSValuesMap = new Map<string, any>();
+    const oSValuesMap = new Map<string, Record<string, unknown>>();
     for (const element of oSValuesResults.records) {
-      oSValuesMap.set(element['Id'] as string, element);
+      oSValuesMap.set(String(element['Id']), element);
     }
 
-    AppUtils.log3('OmniScripts and IntegrationProcedures Found: ' + oSValuesResults.records.length);
+    AppUtils.log3('OmniScripts and IntegrationProcedures Found: ' + String(oSValuesResults.records.length));
     numberofOSandVIP = oSValuesResults.records.length;
 
     AppUtils.log3('Looking for Dependencies in Main DataPack');
     Remote.omniScriptPropertySet(oSValuesResults, createFilesStream);
 
     AppUtils.log3('Looking for Dependencies in All Elements');
-    conn.bulk.pollInterval = 5000;
-    conn.bulk.pollTimeout = 60000;
     Remote.queryElements(conn, oSValuesMap, createFilesStream);
-  }
-
-  static report(): void {
-    console.log('');
-    AppUtils.log3('Done Finding Dependencies');
-    AppUtils.log3('Number of OmniScripts and IntegrationProcedures Scanned: ' + numberofOSandVIP);
-    AppUtils.log3('Number of Total Dependencies Found: ' + totalDependenciesFound);
-    AppUtils.log3('CSV File Generated: ' + resultsFile);
-    console.log('');
-  }
-
-  static omniScriptPropertySet(omniScripRecords: any, createFilesStream: fs.WriteStream): void {
-    let totalDep = 0;
-    for (const element of omniScripRecords.records) {
-      const propertySet = element[propertySetOSField];
-      const omniScriptType = element[typeField];
-      const omniScriptSubType = element[subTypeField];
-      const omniScriptLanguage = element[languageField];
-      const dataPack = omniScriptType + '_' + omniScriptSubType + '_' + omniScriptLanguage;
-      const isReusableValue = element[isResusableField];
-      let dataPackType = 'OmniScript';
-      if (element[isProcedureField] === true) dataPackType = 'IntegrationProcedure';
-      if (propertySet) {
-        const resultDep = Remote.getPropertySetValues(
-          createFilesStream,
-          propertySet,
-          dataPackType,
-          dataPack,
-          isReusableValue
-        );
-        totalDep += resultDep;
-      }
-    }
-    totalDependenciesFound += totalDep;
-  }
-
-  static queryElements(conn: any, omniScripRecords: Map<string, any>, createFilesStream: fs.WriteStream): void {
-    const elementsQuery =
-      'SELECT Id, Name, %name-space%OmniScriptId__c, %name-space%PropertySet__c FROM %name-space%Element__c';
-    const queryString2 = AppUtils.replaceaNameSpace(elementsQuery);
-
-    conn.bulk
-      .query(queryString2)
-      .on('record', (result: any) => {
-        const elementPropertySet = result[propertySetOSField];
-        const omniScripId = result[elementOSIDField];
-        const omniScripRecord = omniScripRecords.get(omniScripId);
-        if (omniScripRecord) {
-          let dataPackType = 'OmniScript';
-          if (omniScripRecord[isProcedureField] === true) dataPackType = 'IntegrationProcedure';
-          const omniScriptType = omniScripRecord[typeField];
-          const omniScriptSubType = omniScripRecord[subTypeField];
-          const omniScriptLanguage = omniScripRecord[languageField];
-          const dataPack = omniScriptType + '_' + omniScriptSubType + '_' + omniScriptLanguage;
-          const isReusableValue = omniScripRecord[isResusableField];
-          AppUtils.log2('Looking for Dependencies in ' + dataPackType + ': ' + dataPack);
-          const resultDep = Remote.getPropertySetValues(
-            createFilesStream,
-            elementPropertySet,
-            dataPackType,
-            dataPack,
-            isReusableValue
-          );
-          totalDependenciesFound += resultDep;
-        }
-      })
-      .on('queue', () => {
-        AppUtils.log3('Done looking for Dependencies in Elements');
-      })
-      .on('end', () => {
-        Remote.report();
-      })
-      .on('error', (err: any) => {
-        console.error(err);
-      });
-  }
-
-  static getPropertySetValues(
-    createFilesStream: fs.WriteStream,
-    propertySetObject: string,
-    dataPackType: string,
-    dataPack: string,
-    isReusable: any
-  ): number {
-    let found = 0;
-    const jsonStringObjects = JSON.parse(propertySetObject);
-
-    const bundle = jsonStringObjects['bundle'];
-    if (bundle) {
-      createFilesStream.write(
-        dataPackType + '/' + dataPack + ',' + isReusable + ',DataRaptor/' + bundle + ',DataRaptor,None,None\r\n'
-      );
-      found++;
-    }
-
-    const type = jsonStringObjects['Type'];
-    const subType = jsonStringObjects['Sub Type'];
-    const language = jsonStringObjects['Language'];
-    if (type) {
-      const completeName = type + '_' + subType + '_' + language;
-      createFilesStream.write(
-        dataPackType +
-          '/' +
-          dataPack +
-          ',' +
-          isReusable +
-          ',OmniScript/' +
-          completeName +
-          ',OmniScript,None,None\r\n'
-      );
-      found++;
-    }
-
-    const vipKey = jsonStringObjects['integrationProcedureKey'];
-    if (vipKey) {
-      createFilesStream.write(
-        dataPackType +
-          '/' +
-          dataPack +
-          ',' +
-          isReusable +
-          ',IntegrationProcedure/' +
-          vipKey +
-          ',IntegrationProcedure,None,None\r\n'
-      );
-      found++;
-    }
-
-    const remoteClass = jsonStringObjects['remoteClass'];
-    const remoteMethod = jsonStringObjects['remoteMethod'];
-    if (remoteClass) {
-      createFilesStream.write(
-        dataPackType +
-          '/' +
-          dataPack +
-          ',' +
-          isReusable +
-          ',' +
-          remoteClass +
-          '.' +
-          remoteMethod +
-          ',REMOTE CALL,' +
-          remoteClass +
-          ',' +
-          remoteMethod +
-          '\r\n'
-      );
-      found++;
-    }
-
-    const templateID = jsonStringObjects['HTMLTemplateId'];
-    if (templateID) {
-      createFilesStream.write(
-        dataPackType +
-          '/' +
-          dataPack +
-          ',' +
-          isReusable +
-          ',VlocityUITemplate/' +
-          templateID +
-          ',VlocityUITemplate,None,None\r\n'
-      );
-      found++;
-    }
-
-    return found;
   }
 }

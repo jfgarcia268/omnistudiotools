@@ -1,6 +1,9 @@
 import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Messages } from '@salesforce/core';
 import { AppUtils } from '../../../utils/AppUtils.js';
+import type { SfConnection } from '../../../utils/AppUtils.js';
+import { getBulk } from '../../../utils/BulkTypes.js';
+import type { BulkIngestBatchResult } from '../../../utils/BulkTypes.js';
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url);
 const messages = Messages.loadMessages('omnistudiotools', 'omnistudiotools.clean.savedomniscripts');
@@ -13,6 +16,34 @@ export default class CleanSavedOmniScripts extends SfCommand<void> {
     'target-org': Flags.requiredOrg(),
     package: Flags.string({ char: 'p', summary: messages.getMessage('flags.package.summary') }),
   };
+
+  private static async deleteRecords(conn: SfConnection, type: string, recordsToDelete: Array<Record<string, unknown>>): Promise<void> {
+    const bulk = getBulk(conn);
+    await new Promise<void>((resolveBatch) => {
+      const job = bulk.createJob(type, 'delete');
+      const batch = job.createBatch();
+      batch.execute(recordsToDelete);
+
+      batch.on('error', (err: Error) => {
+        AppUtils.log2('Error, batchInfo: ' + String(err));
+        resolveBatch();
+      });
+      batch.on('queue', () => {
+        AppUtils.log2('Waiting for batch to finish');
+        batch.poll(1000, 20_000);
+      });
+      batch.on('response', (rets: BulkIngestBatchResult) => {
+        for (let i = 0; i < rets.length; i++) {
+          if (rets[i].success) {
+            AppUtils.log1('#' + (i + 1) + ' Delete successfully: ' + String(rets[i].id));
+          } else {
+            AppUtils.log1('#' + (i + 1) + ' Error occurred, message = ' + rets[i].errors.join(', '));
+          }
+        }
+        resolveBatch();
+      });
+    });
+  }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(CleanSavedOmniScripts);
@@ -43,14 +74,14 @@ export default class CleanSavedOmniScripts extends SfCommand<void> {
     const savedOmniScriptsQuery = AppUtils.replaceaNameSpace(savedOmniScriptsQueryInitial);
     const savedOmniScriptsAttachmentsQuery = AppUtils.replaceaNameSpace(savedOmniScriptsAttachmentsQueryInitial);
 
-    const resultSavedOmniAttachments = await conn.query(savedOmniScriptsAttachmentsQuery);
+    const resultSavedOmniAttachments = await conn.query<Record<string, unknown>>(savedOmniScriptsAttachmentsQuery);
     if (!resultSavedOmniAttachments || resultSavedOmniAttachments.records.length <= 0) {
       AppUtils.log2('No Attachments to delete');
     } else {
       await CleanSavedOmniScripts.deleteRecords(conn, 'Attachment', resultSavedOmniAttachments.records);
     }
 
-    const resultSavedOmniScripts = await conn.query(savedOmniScriptsQuery);
+    const resultSavedOmniScripts = await conn.query<Record<string, unknown>>(savedOmniScriptsQuery);
     if (!resultSavedOmniScripts || resultSavedOmniScripts.records.length <= 0) {
       AppUtils.log2('No Saved OmniScripts Found to delete');
     } else {
@@ -60,32 +91,5 @@ export default class CleanSavedOmniScripts extends SfCommand<void> {
         resultSavedOmniScripts.records
       );
     }
-  }
-
-  private static async deleteRecords(conn: any, type: string, recordsToDelete: any[]): Promise<void> {
-    await new Promise<void>((resolveBatch) => {
-      const job = conn.bulk.createJob(type, 'delete');
-      const batch = job.createBatch();
-      batch.execute(recordsToDelete);
-
-      batch.on('error', (err: any) => {
-        console.log('Error, batchInfo:', err);
-        resolveBatch();
-      });
-      batch.on('queue', () => {
-        AppUtils.log2('Waiting for batch to finish');
-        batch.poll(1000, 20000);
-      });
-      batch.on('response', (rets: any[]) => {
-        for (let i = 0; i < rets.length; i++) {
-          if (rets[i].success) {
-            AppUtils.log1('#' + (i + 1) + ' Delete successfully: ' + rets[i].id);
-          } else {
-            AppUtils.log1('#' + (i + 1) + ' Error occurred, message = ' + rets[i].errors.join(', '));
-          }
-        }
-        resolveBatch();
-      });
-    });
   }
 }

@@ -12,9 +12,9 @@ export default class Mock extends SfCommand<void> {
 
   public static readonly flags = {
     'target-org': Flags.requiredOrg(),
-    object: Flags.string({ char: 'o', summary: messages.getMessage('flags.object.summary'), required: true }),
+    object: Flags.string({ char: 'b', summary: messages.getMessage('flags.object.summary'), required: true }),
     count: Flags.integer({ char: 'c', summary: messages.getMessage('flags.count.summary'), required: true }),
-    batch: Flags.integer({ char: 'b', summary: messages.getMessage('flags.batch.summary') }),
+    batch: Flags.integer({ char: 'z', summary: messages.getMessage('flags.batch.summary') }),
   };
 
   public async run(): Promise<void> {
@@ -25,7 +25,7 @@ export default class Mock extends SfCommand<void> {
     const conn = flags['target-org'].getConnection(undefined);
     const object = flags.object;
     const count = flags.count;
-    const batchSize = flags.batch ?? 100000;
+    const batchSize = flags.batch ?? 100_000;
 
     AppUtils.log4('Creating Mock Records...');
 
@@ -33,8 +33,9 @@ export default class Mock extends SfCommand<void> {
     let missing = count;
     AppUtils.log4('Number of Local Batches: ' + numofloops);
 
+    const allBatches: Array<{ records: Array<{ Name: string }> }> = [];
     for (let index = 0; index < numofloops; index++) {
-      const records: any[] = [];
+      const records: Array<{ Name: string }> = [];
       const numForThisBatch = missing > batchSize ? batchSize : missing;
       missing = missing - batchSize;
       AppUtils.log3('Batch # ' + (index + 1) + ' - ' + numForThisBatch + ' Records');
@@ -42,8 +43,10 @@ export default class Mock extends SfCommand<void> {
         const mockName = 'Mock' + index + '.' + index2;
         records.push({ Name: mockName });
       }
-      await DBUtils.bulkAPIInsert(records, conn, object);
+      allBatches.push({ records });
     }
+    const insertPromises = allBatches.map((batch) => DBUtils.bulkAPIInsert(batch.records, conn, object));
+    await Promise.all(insertPromises);
 
     AppUtils.log3('Creating Mock Records Finished');
   }

@@ -12,7 +12,7 @@ export default class UpdateField extends SfCommand<void> {
 
   public static readonly flags = {
     'target-org': Flags.requiredOrg(),
-    object: Flags.string({ char: 'o', summary: messages.getMessage('flags.object.summary'), required: true }),
+    object: Flags.string({ char: 'b', summary: messages.getMessage('flags.object.summary'), required: true }),
     field: Flags.string({ char: 'f', summary: messages.getMessage('flags.field.summary'), required: true }),
     value: Flags.string({ char: 'v', summary: messages.getMessage('flags.value.summary'), required: true }),
     where: Flags.string({ char: 'w', summary: messages.getMessage('flags.where.summary') }),
@@ -43,8 +43,8 @@ export default class UpdateField extends SfCommand<void> {
     } else {
       AppUtils.log4('Updating Data Locally...');
       AppUtils.log3('Number Of records to Update: ' + records.length);
-      for (let i = 0; i < records.length; i++) {
-        records[i][field] = value;
+      for (const record of records) {
+        (record as Record<string, string>)[field] = value;
       }
       AppUtils.log4('Updating Data...');
       await DBUtils.bulkAPIUpdate(records, conn, object);

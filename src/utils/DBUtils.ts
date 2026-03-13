@@ -1,34 +1,37 @@
-import { AppUtils } from './AppUtils.js';
 import fsExtra from 'fs-extra';
+import { AppUtils } from './AppUtils.js';
+import type { SfConnection } from './AppUtils.js';
+import { getBulk } from './BulkTypes.js';
+import type { BulkIngestBatchResult, BulkJob } from './BulkTypes.js';
 
 export class DBUtils {
-  private static batchSize = 10000;
   public static bulkApiPollTimeout = 120;
+  private static batchSize = 10_000;
 
-  static async query(conn: any, initialQuery: string): Promise<any> {
+  public static async query(conn: SfConnection, initialQuery: string): Promise<{ records: Array<Record<string, unknown>> }> {
     const query = AppUtils.replaceaNameSpace(initialQuery);
-    const result = await conn.query(query);
-    return result;
+    return conn.query<Record<string, unknown>>(query);
   }
 
-  static async bulkAPIquery(conn: any, initialQuery: string): Promise<any[]> {
+  public static async bulkAPIquery(conn: SfConnection, initialQuery: string): Promise<Array<Record<string, unknown>>> {
     const query = AppUtils.replaceaNameSpace(initialQuery);
     AppUtils.startSpinner('Fetching records');
     let count = 0;
-    const records: any[] = [];
-    conn.bulk.pollInterval = 5000;
-    conn.bulk.pollTimeout = 240000;
+    const records: Array<Record<string, unknown>> = [];
+    const bulk = getBulk(conn);
+    bulk.pollInterval = 5000;
+    bulk.pollTimeout = 240_000;
     const promise = new Promise<string>((resolve) => {
-      conn.bulk
+      bulk
         .query(query)
-        .on('record', (result: any) => {
+        .on('record', (result: Record<string, unknown>) => {
           try {
             records.push(result);
             count++;
             AppUtils.updateSpinnerMessage('Objects Fetched so far: ' + count);
           } catch (error) {
             AppUtils.log3('Objects Fetched so far: ' + count);
-            AppUtils.stopSpinnerMessage('Error Fetching Record: ' + error);
+            AppUtils.stopSpinnerMessage('Error Fetching Record: ' + String(error));
             resolve('error');
           }
         })
@@ -47,214 +50,46 @@ export class DBUtils {
             resolve('No');
           }
         })
-        .on('error', (err: any) => {
-          AppUtils.stopSpinnerMessage('Error Fetching: ' + err);
+        .on('error', (err: Error) => {
+          AppUtils.stopSpinnerMessage('Error Fetching: ' + String(err));
           resolve('error');
         });
     });
     try {
       await promise;
     } catch (error) {
-      AppUtils.log3('Error with Promise: ' + error);
+      AppUtils.log3('Error with Promise: ' + String(error));
     }
     return records;
   }
 
-  static async bulkAPIUpdate(records: any[], conn: any, objectName: string): Promise<void> {
-    const job = await conn.bulk.createJob(objectName, 'update');
+  public static async bulkAPIUpdate(records: Array<Record<string, unknown>>, conn: SfConnection, objectName: string): Promise<void> {
+    const job = getBulk(conn).createJob(objectName, 'update');
     await job.open();
-    const numOfComonents = records.length;
-    const div = numOfComonents / this.batchSize;
-    const numberOfBatches = Math.floor(div) === div ? div : Math.floor(div) + 1;
-    let numberOfBatchesDone = 0;
-    AppUtils.log2('Number Of Batches to be created to Upsert Rows: ' + numberOfBatches);
-    try {
-      const promises: Promise<string>[] = [];
-      for (let i = 0; i < numberOfBatches; i++) {
-        let arraytoupdate = records;
-        if (i < numberOfBatches - 1) {
-          arraytoupdate = records.splice(0, this.batchSize);
-        }
-        const batchNumber = i + 1;
-        const newp = new Promise<string>((resolve) => {
-          const batch = job.createBatch();
-          AppUtils.log1('Creating Batch # ' + batchNumber + ' Number of Records: ' + arraytoupdate.length);
-          batch
-            .execute(arraytoupdate)
-            .on('error', (err: any) => {
-              console.log('Error, batch Info:', err);
-              numberOfBatchesDone = numberOfBatchesDone + 1;
-              resolve('error');
-            })
-            .on('queue', () => {
-              batch.poll(5 * 1000, 1000 * 60 * this.bulkApiPollTimeout);
-              AppUtils.log1('Batch #' + batchNumber + ' with Id: ' + batch.id + ' Has started');
-            })
-            .on('response', (rets: any[]) => {
-              numberOfBatchesDone = numberOfBatchesDone + 1;
-              const hadErrors = DBUtils.noErrors(rets);
-              AppUtils.log1(
-                'Batch #' +
-                  batchNumber +
-                  ' With Id: ' +
-                  batch.id +
-                  ' Finished - Success: ' +
-                  hadErrors +
-                  '  ' +
-                  numberOfBatchesDone +
-                  '/' +
-                  numberOfBatches +
-                  ' Batches have finished'
-              );
-              resolve('response');
-            });
-        }).catch((error) => {
-          AppUtils.log2('Error Creating  batches - Error: ' + error);
-        });
-        promises.push(newp as Promise<string>);
-      }
-      await Promise.all(promises);
-      job.close();
-    } catch (error) {
-      job.close();
-      AppUtils.log2('Error Creating  batches - Error: ' + error);
-    }
+    await DBUtils.runBatches(records, job, objectName);
   }
 
-  static async bulkAPIInsert(records: any[], conn: any, objectName: string): Promise<void> {
-    const job = await conn.bulk.createJob(objectName, 'insert');
+  public static async bulkAPIInsert(records: Array<Record<string, unknown>>, conn: SfConnection, objectName: string): Promise<void> {
+    const job = getBulk(conn).createJob(objectName, 'insert');
     await job.open();
-    const numOfComonents = records.length;
-    const div = numOfComonents / this.batchSize;
-    const numberOfBatches = Math.floor(div) === div ? div : Math.floor(div) + 1;
-    let numberOfBatchesDone = 0;
-    AppUtils.log2('Number Of Batches to be created to Insert Rows: ' + numberOfBatches);
-    try {
-      const promises: Promise<string>[] = [];
-      for (let i = 0; i < numberOfBatches; i++) {
-        let arraytoupdate = records;
-        if (i < numberOfBatches - 1) {
-          arraytoupdate = records.splice(0, this.batchSize);
-        }
-        const batchNumber = i + 1;
-        const newp = new Promise<string>((resolve) => {
-          const batch = job.createBatch();
-          AppUtils.log1('Creating Batch # ' + batchNumber + ' Number of Records: ' + arraytoupdate.length);
-          batch
-            .execute(arraytoupdate)
-            .on('error', (err: any) => {
-              console.log('Error, batch Info:', err);
-              numberOfBatchesDone = numberOfBatchesDone + 1;
-              resolve('error');
-            })
-            .on('queue', () => {
-              batch.poll(5 * 1000, 1000 * 60 * this.bulkApiPollTimeout);
-              AppUtils.log1('Batch #' + batchNumber + ' with Id: ' + batch.id + ' Has started');
-            })
-            .on('response', (rets: any[]) => {
-              numberOfBatchesDone = numberOfBatchesDone + 1;
-              const hadErrors = DBUtils.noErrors(rets);
-              AppUtils.log1(
-                'Batch #' +
-                  batchNumber +
-                  ' With Id: ' +
-                  batch.id +
-                  ' Finished - Success: ' +
-                  hadErrors +
-                  '  ' +
-                  numberOfBatchesDone +
-                  '/' +
-                  numberOfBatches +
-                  ' Batches have finished'
-              );
-              resolve('response');
-            });
-        }).catch((error) => {
-          AppUtils.log2('Error Creating  batches - Error: ' + error);
-        });
-        promises.push(newp as Promise<string>);
-      }
-      await Promise.all(promises);
-      job.close();
-    } catch (error) {
-      job.close();
-      AppUtils.log2('Error Creating  batches - Error: ' + error);
-    }
+    await DBUtils.runBatches(records, job, objectName);
   }
 
-  static async bulkAPIUpsert(
-    records: any[],
-    conn: any,
+  public static async bulkAPIUpsert(
+    records: Array<Record<string, unknown>>,
+    conn: SfConnection,
     objectName: string,
     id: string,
     save: boolean
   ): Promise<void> {
-    const job = await conn.bulk.createJob(objectName, 'upsert', { extIdField: id });
+    const job = getBulk(conn).createJob(objectName, 'upsert', { extIdField: id });
     await job.open();
-    const numOfComonents = records.length;
-    const div = numOfComonents / this.batchSize;
-    const numberOfBatches = Math.floor(div) === div ? div : Math.floor(div) + 1;
-    let numberOfBatchesDone = 0;
-    AppUtils.log2('Number Of Batches to be created to Update Rows: ' + numberOfBatches);
-    try {
-      const promises: Promise<string>[] = [];
-      for (let i = 0; i < numberOfBatches; i++) {
-        let arraytoupdate = records;
-        if (i < numberOfBatches - 1) {
-          arraytoupdate = records.splice(0, this.batchSize);
-        }
-        const batchNumber = i + 1;
-        const newp = new Promise<string>((resolve) => {
-          const batch = job.createBatch();
-          AppUtils.log1('Creating Batch # ' + batchNumber + ' Number of Records: ' + arraytoupdate.length);
-          batch
-            .execute(arraytoupdate)
-            .on('error', (err: any) => {
-              console.log('Error, batch Info:', err);
-              numberOfBatchesDone = numberOfBatchesDone + 1;
-              resolve('error');
-            })
-            .on('queue', () => {
-              batch.poll(5 * 1000, 1000 * 60 * this.bulkApiPollTimeout);
-              AppUtils.log1('Batch #' + batchNumber + ' with Id: ' + batch.id + ' Has started');
-            })
-            .on('response', (rets: any[]) => {
-              numberOfBatchesDone = numberOfBatchesDone + 1;
-              const hadErrors = DBUtils.noErrors(rets);
-              AppUtils.log1(
-                'Batch #' +
-                  batchNumber +
-                  ' With Id: ' +
-                  batch.id +
-                  ' Finished - Success: ' +
-                  hadErrors +
-                  '  ' +
-                  numberOfBatchesDone +
-                  '/' +
-                  numberOfBatches +
-                  ' Batches have finished'
-              );
-              if (save) {
-                DBUtils.saveResults(rets, batchNumber, objectName);
-              }
-              resolve('response');
-            });
-        }).catch((error) => {
-          AppUtils.log2('Error Creating  batches - Error: ' + error);
-        });
-        promises.push(newp as Promise<string>);
-      }
-      await Promise.all(promises);
-      job.close();
-    } catch (error) {
-      job.close();
-      AppUtils.log2('Error Creating  batches - Error: ' + error);
-    }
+    await DBUtils.runBatches(records, job, objectName, save);
   }
 
-  static async csvToJson(csv: string): Promise<any[]> {
+  public static csvToJson(csv: string): Array<Record<string, string>> {
     const lines = csv.split('\n');
-    const result: any[] = [];
+    const result: Array<Record<string, string>> = [];
     const headers = lines[0].split(',');
     for (let i = 1; i < lines.length; i++) {
       const obj: Record<string, string> = {};
@@ -267,8 +102,8 @@ export class DBUtils {
     return result;
   }
 
-  static async bulkAPIQueryAndDelete(
-    conn: any,
+  public static async bulkAPIQueryAndDelete(
+    conn: SfConnection,
     objectName: string,
     hardelete: boolean,
     bulkApiPollTimeout?: number
@@ -281,8 +116,8 @@ export class DBUtils {
     }
   }
 
-  static async bulkAPIQueryAndDeleteWithQuery(
-    conn: any,
+  public static async bulkAPIQueryAndDeleteWithQuery(
+    conn: SfConnection,
     object: string,
     query: string,
     hardelete: boolean,
@@ -295,22 +130,22 @@ export class DBUtils {
     }
   }
 
-  static async easyBulkAPIdelete(records: any[], conn: any, objectName: string): Promise<void> {
+  public static async easyBulkAPIdelete(records: Array<Record<string, unknown>>, conn: SfConnection, objectName: string): Promise<void> {
     await this.bulkAPIdelete(records, conn, objectName, false, false, null, this.bulkApiPollTimeout);
   }
 
-  static async bulkAPIdelete(
-    records: any[],
-    conn: any,
+  public static async bulkAPIdelete(
+    records: Array<Record<string, unknown>>,
+    conn: SfConnection,
     objectName: string,
     save: boolean,
     hardelete: boolean,
-    resultData: any[] | null,
+    resultData: Array<Record<string, unknown>> | null,
     bulkApiPollTimeout: number | null
   ): Promise<void> {
     const timeout = bulkApiPollTimeout ?? this.bulkApiPollTimeout;
     const deleteType = hardelete === true ? 'hardDelete' : 'delete';
-    const job = await conn.bulk.createJob(objectName, deleteType);
+    const job = getBulk(conn).createJob(objectName, deleteType);
     await job.open();
     const numOfComonents = records.length;
     const div = numOfComonents / this.batchSize;
@@ -318,7 +153,7 @@ export class DBUtils {
     let numberOfBatchesDone = 0;
     AppUtils.log2('Number Of Batches to be created to delete Rows: ' + numberOfBatches);
     try {
-      const promises: Promise<string>[] = [];
+      const promises: Array<Promise<string>> = [];
       for (let i = 0; i < numberOfBatches; i++) {
         let arraytoDelete = records;
         if (i < numberOfBatches - 1) {
@@ -330,23 +165,23 @@ export class DBUtils {
           AppUtils.log1('Creating Batch # ' + batchNumber + ' Number of Records: ' + arraytoDelete.length);
           batch
             .execute(arraytoDelete)
-            .on('error', (err: any) => {
-              console.log('Error, batch Info:', err);
+            .on('error', (err: Error) => {
+              AppUtils.log2('Error, batch Info: ' + String(err));
               numberOfBatchesDone = numberOfBatchesDone + 1;
               if (resultData) {
                 resultData.push({
                   ObjectName: objectName,
                   RecordsFound: records.length,
-                  DeleteSuccess: 'No Error: ' + err,
+                  DeleteSuccess: 'No Error: ' + String(err),
                 });
               }
               resolve('error');
             })
             .on('queue', () => {
               batch.poll(5 * 1000, 1000 * 60 * timeout);
-              AppUtils.log1('Batch #' + batchNumber + ' with Id: ' + batch.id + ' Has started');
+              AppUtils.log1('Batch #' + batchNumber + ' with Id: ' + String(batch.id) + ' Has started');
             })
-            .on('response', (rets: any[]) => {
+            .on('response', (rets: BulkIngestBatchResult) => {
               numberOfBatchesDone = numberOfBatchesDone + 1;
               const errorsNumber = DBUtils.numFail(rets);
               const recordsGood = rets.length - errorsNumber;
@@ -355,9 +190,9 @@ export class DBUtils {
                 'Batch #' +
                   batchNumber +
                   ' With Id: ' +
-                  batch.id +
+                  String(batch.id) +
                   ' Finished - Success: ' +
-                  hadErrors +
+                  String(hadErrors) +
                   ' - Records Success: ' +
                   recordsGood +
                   ' Records Fail: ' +
@@ -382,13 +217,13 @@ export class DBUtils {
               }
               resolve('response');
             });
-        }).catch((error) => {
-          AppUtils.log2('Error Creating  batches - Error: ' + error);
+        }).catch((error: unknown) => {
+          AppUtils.log2('Error Creating  batches - Error: ' + String(error));
           if (resultData) {
             resultData.push({
               ObjectName: objectName,
               RecordsFound: records.length,
-              DeleteSuccess: 'No Error: ' + error,
+              DeleteSuccess: 'No Error: ' + String(error),
               RecordsSuccess: 'N/A',
               RecordsFail: 'N/A',
             });
@@ -400,12 +235,12 @@ export class DBUtils {
       job.close();
     } catch (error) {
       job.close();
-      AppUtils.log2('Error Creating  batches - Error: ' + error);
+      AppUtils.log2('Error Creating  batches - Error: ' + String(error));
       if (resultData) {
         resultData.push({
           ObjectName: objectName,
           RecordsFound: records.length,
-          DeleteSuccess: 'No Error: ' + error,
+          DeleteSuccess: 'No Error: ' + String(error),
           RecordsSuccess: 'N/A',
           RecordsFail: 'N/A',
         });
@@ -413,7 +248,74 @@ export class DBUtils {
     }
   }
 
-  private static saveResults(rets: any[], batchNumber: number, objectName: string): void {
+  private static async runBatches(
+    records: Array<Record<string, unknown>>,
+    job: BulkJob,
+    objectName: string,
+    save?: boolean
+  ): Promise<void> {
+    const numOfComonents = records.length;
+    const div = numOfComonents / this.batchSize;
+    const numberOfBatches = Math.floor(div) === div ? div : Math.floor(div) + 1;
+    let numberOfBatchesDone = 0;
+    AppUtils.log2('Number Of Batches to be created: ' + numberOfBatches);
+    try {
+      const promises: Array<Promise<string>> = [];
+      for (let i = 0; i < numberOfBatches; i++) {
+        let arraytoupdate = records;
+        if (i < numberOfBatches - 1) {
+          arraytoupdate = records.splice(0, this.batchSize);
+        }
+        const batchNumber = i + 1;
+        const newp = new Promise<string>((resolve) => {
+          const batch = job.createBatch();
+          AppUtils.log1('Creating Batch # ' + batchNumber + ' Number of Records: ' + arraytoupdate.length);
+          batch
+            .execute(arraytoupdate)
+            .on('error', (err: Error) => {
+              AppUtils.log2('Error, batch Info: ' + String(err));
+              numberOfBatchesDone = numberOfBatchesDone + 1;
+              resolve('error');
+            })
+            .on('queue', () => {
+              batch.poll(5 * 1000, 1000 * 60 * this.bulkApiPollTimeout);
+              AppUtils.log1('Batch #' + batchNumber + ' with Id: ' + String(batch.id) + ' Has started');
+            })
+            .on('response', (rets: BulkIngestBatchResult) => {
+              numberOfBatchesDone = numberOfBatchesDone + 1;
+              const hadErrors = DBUtils.noErrors(rets);
+              AppUtils.log1(
+                'Batch #' +
+                  batchNumber +
+                  ' With Id: ' +
+                  String(batch.id) +
+                  ' Finished - Success: ' +
+                  String(hadErrors) +
+                  '  ' +
+                  numberOfBatchesDone +
+                  '/' +
+                  numberOfBatches +
+                  ' Batches have finished'
+              );
+              if (save) {
+                DBUtils.saveResults(rets, batchNumber, objectName);
+              }
+              resolve('response');
+            });
+        }).catch((error: unknown) => {
+          AppUtils.log2('Error Creating  batches - Error: ' + String(error));
+        });
+        promises.push(newp as Promise<string>);
+      }
+      await Promise.all(promises);
+      job.close();
+    } catch (error) {
+      job.close();
+      AppUtils.log2('Error Creating  batches - Error: ' + String(error));
+    }
+  }
+
+  private static saveResults(rets: BulkIngestBatchResult, batchNumber: number, objectName: string): void {
     const fileName = 'Results_' + objectName + '_' + batchNumber + '.json';
     if (fsExtra.existsSync(fileName)) {
       fsExtra.unlinkSync(fileName);
@@ -423,16 +325,16 @@ export class DBUtils {
     AppUtils.log1('File Created: ' + fileName);
   }
 
-  private static noErrors(rets: any[]): boolean {
+  private static noErrors(rets: BulkIngestBatchResult): boolean {
     for (const element of rets) {
-      if (element.success === false) {
+      if (!element.success) {
         return false;
       }
     }
     return true;
   }
 
-  private static numFail(rets: any[]): number {
+  private static numFail(rets: BulkIngestBatchResult): number {
     let recordsFail = 0;
     for (const element of rets) {
       if (!element.success) {
